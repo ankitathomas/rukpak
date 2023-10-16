@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	apimachyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,6 +94,7 @@ func WithReleaseNamespace(releaseNamespace string) Option {
 func SetupWithManager(mgr manager.Manager, opts ...Option) error {
 	c := &controller{
 		cl:               mgr.GetClient(),
+		cfg:              mgr.GetConfig(),
 		dynamicWatchGVKs: map[schema.GroupVersionKind]struct{}{},
 	}
 
@@ -143,7 +145,8 @@ func (c *controller) validateConfig() error {
 
 // controller reconciles a BundleDeployment object
 type controller struct {
-	cl client.Client
+	cl  client.Client
+	cfg *rest.Config
 
 	handler          Handler
 	provisionerID    string
@@ -371,6 +374,22 @@ func (c *controller) reconcile(ctx context.Context, bd *rukpakv1alpha1.BundleDep
 	bd.Status.ActiveBundle = bundle.GetName()
 
 	if features.RukpakFeatureGate.Enabled(features.BundleDeploymentHealth) {
+		if err = healthchecks.AreObjectsReady(ctx, c.cl, c.cfg, relObjects); err != nil {
+			meta.SetStatusCondition(&bd.Status.Conditions, metav1.Condition{
+				Type:    rukpakv1alpha1.TypeHealthy,
+				Status:  metav1.ConditionFalse,
+				Reason:  rukpakv1alpha1.ReasonUnhealthy,
+				Message: err.Error(),
+			})
+		}
+		if err = healthchecks.AreObjectsKstatusReady(ctx, c.cl, relObjects); err != nil {
+			meta.SetStatusCondition(&bd.Status.Conditions, metav1.Condition{
+				Type:    rukpakv1alpha1.TypeHealthy,
+				Status:  metav1.ConditionFalse,
+				Reason:  rukpakv1alpha1.ReasonUnhealthy,
+				Message: err.Error(),
+			})
+		}
 		if err = healthchecks.AreObjectsHealthy(ctx, c.cl, relObjects); err != nil {
 			meta.SetStatusCondition(&bd.Status.Conditions, metav1.Condition{
 				Type:    rukpakv1alpha1.TypeHealthy,
